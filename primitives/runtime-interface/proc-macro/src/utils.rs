@@ -20,16 +20,54 @@ use proc_macro2::{TokenStream, Span};
 
 use syn::{
 	Ident, Error, Signature, Pat, PatType, FnArg, Type, token, TraitItemMethod, ItemTrait,
-	TraitItem, parse_quote, spanned::Spanned,
+	TraitItem, parse_quote, spanned::Spanned, Result, Meta, NestedMeta, Lit, Attribute,
 };
 
 use proc_macro_crate::crate_name;
 
 use std::env;
+use std::collections::BTreeMap;
 
 use quote::quote;
 
 use inflector::Inflector;
+
+pub struct RuntimeInterfaceItem<'a> {
+	latest_version: u32,
+	versions: BTreeMap<u32, &'a TraitItemMethod>,
+}
+
+impl<'a> RuntimeInterfaceItem<'a> {
+	fn new(version: u32, trait_item: &'a TraitItemMethod) -> Self {
+		Self {
+			latest_version: version,
+			versions: {
+				let mut res = BTreeMap::new();
+				res.insert(version, trait_item);
+				res
+			},
+		}
+	}
+
+	pub fn latest_version(&self) -> &TraitItemMethod {
+		self.versions.get(&self.latest_version)
+			.expect("If latest_version has a value, the key with this value is in the versions")
+	}
+}
+
+pub struct RuntimeInterface<'a> {
+	items: BTreeMap<syn::Ident, RuntimeInterfaceItem<'a>>,
+}
+
+impl<'a> RuntimeInterface<'a> {
+	pub fn latest_versions(&self) -> impl Iterator<Item = &TraitItemMethod> {
+		self.items.iter().map(|(_, item)| item.latest_version())
+	}
+
+	pub fn _all_versions(&self) -> impl Iterator<Item = (u32, &TraitItemMethod)> {
+		self.items.iter().flat_map(|(_, item)| item.versions.iter()).map(|(v, i)| (*v, *i))
+	}
+ }
 
 /// Generates the include for the runtime-interface crate.
 pub fn generate_runtime_interface_include() -> TokenStream {
@@ -151,7 +189,7 @@ pub fn get_function_argument_types_ref_and_mut<'a>(
 }
 
 /// Returns an iterator over all trait methods for the given trait definition.
-pub fn get_trait_methods<'a>(trait_def: &'a ItemTrait) -> impl Iterator<Item = &'a TraitItemMethod> {
+fn get_trait_methods<'a>(trait_def: &'a ItemTrait) -> impl Iterator<Item = &'a TraitItemMethod> {
 	trait_def
 		.items
 		.iter()
@@ -159,4 +197,57 @@ pub fn get_trait_methods<'a>(trait_def: &'a ItemTrait) -> impl Iterator<Item = &
 			TraitItem::Method(ref method) => Some(method),
 			_ => None,
 		})
+}
+
+fn parse_version_attribute(version: &Attribute) -> Result<u32> {
+	let meta = version.parse_meta()?;
+
+	let err = Err(Error::new(
+			meta.span(),
+			"Unexpected `version` attribute. The supported format is `#[version(1)]`",
+		)
+	);
+
+	match meta {
+		Meta::List(list) => {
+			if list.nested.len() != 1 {
+				err
+			} else if let Some(NestedMeta::Lit(Lit::Int(i))) = list.nested.first() {
+				i.base10_parse()
+			} else {
+				err
+			}
+		},
+		_ => err,
+	}
+}
+
+fn get_item_version(item: &TraitItemMethod) -> Result<Option<u32>> {
+	match item.attrs.iter().find(|attr| attr.path.is_ident("version"))
+		.map(|attr| parse_version_attribute(attr))
+	{
+		Some(Err(e)) => Err(e),
+		Some(Ok(v)) => Ok(Some(v)),
+		None => Ok(None),
+	}
+}
+
+/// Returns all runtime intrface members, with versions.
+pub fn get_runtime_interface<'a>(trait_def: &'a ItemTrait)
+	-> Result<RuntimeInterface<'a>>
+{
+	let mut result: BTreeMap<syn::Ident, RuntimeInterfaceItem<'a>> = BTreeMap::new();
+
+	for item in get_trait_methods(trait_def) {
+		let name = item.sig.ident.clone();
+		let version = get_item_version(item)?.unwrap_or(1);
+
+		result
+			.entry(name.clone())
+			// TODO: duplciate versions!
+			.and_modify(|interface_item| { interface_item.versions.insert(version, item); })
+			.or_insert_with(|| RuntimeInterfaceItem::new(version, item));
+	}
+
+	Ok(RuntimeInterface { items: result })
 }

@@ -23,8 +23,8 @@
 use crate::utils::{
 	generate_crate_access, create_host_function_ident, get_function_argument_names,
 	get_function_argument_types_without_ref, get_function_argument_types_ref_and_mut,
-	get_function_argument_names_and_types_without_ref, get_trait_methods, get_function_arguments,
-	get_function_argument_types, create_exchangeable_host_function_ident,
+	get_function_argument_names_and_types_without_ref, get_function_arguments,
+	get_function_argument_types, create_exchangeable_host_function_ident, get_runtime_interface,
 };
 
 use syn::{
@@ -44,12 +44,14 @@ use std::iter::{Iterator, self};
 /// implementations for the host functions on the host.
 pub fn generate(trait_def: &ItemTrait, is_wasm_only: bool) -> Result<TokenStream> {
 	let trait_name = &trait_def.ident;
-	let extern_host_function_impls = get_trait_methods(trait_def)
+	let extern_host_function_impls = get_runtime_interface(trait_def)?
+		.latest_versions()
 		.try_fold(TokenStream::new(), |mut t, m| {
 			t.extend(generate_extern_host_function(m, trait_name)?);
 			Ok::<_, Error>(t)
 		})?;
-	let exchangeable_host_functions = get_trait_methods(trait_def)
+	let exchangeable_host_functions = get_runtime_interface(trait_def)?
+		.latest_versions()
 		.try_fold(TokenStream::new(), |mut t, m| {
 			t.extend(generate_exchangeable_host_function(m)?);
 			Ok::<_, Error>(t)

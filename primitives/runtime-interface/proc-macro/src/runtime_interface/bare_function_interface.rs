@@ -30,7 +30,7 @@
 
 use crate::utils::{
 	generate_crate_access, create_exchangeable_host_function_ident, get_function_arguments,
-	get_function_argument_names, get_trait_methods,
+	get_function_argument_names, get_runtime_interface,
 };
 
 use syn::{
@@ -47,7 +47,7 @@ use std::iter;
 /// of the trait method.
 pub fn generate(trait_def: &ItemTrait, is_wasm_only: bool) -> Result<TokenStream> {
 	let trait_name = &trait_def.ident;
-	get_trait_methods(trait_def).try_fold(TokenStream::new(), |mut t, m| {
+	get_runtime_interface(trait_def)?.latest_versions().try_fold(TokenStream::new(), |mut t, m| {
 		t.extend(function_for_method(trait_name, m, is_wasm_only)?);
 		Ok(t)
 	})
